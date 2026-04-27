@@ -147,7 +147,8 @@ export async function createProviders(walletCtx: Awaited<ReturnType<typeof creat
     privateStateProvider: levelPrivateStateProvider({
       midnightDbName: 'midnight-level-db',
       privateStateStoreName: PRIVATE_STATE_ID,
-      privateStoragePasswordProvider: () => 'Repro186!',
+      // level-private-state-provider requires >= 16 characters.
+      privateStoragePasswordProvider: () => 'Midnight-Error-186-Repro!',
       accountId: state.shielded.encryptionPublicKey.toHexString().slice(0, 16),
       walletProvider,
     }),
