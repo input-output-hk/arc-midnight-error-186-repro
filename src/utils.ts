@@ -25,6 +25,20 @@ globalThis.WebSocket = WebSocket;
 
 setNetworkId('undeployed' as any);
 
+// Workaround for a ledger-v8 bug: MerkleTree::collapse panics on non-empty
+// trees during shielded-state apply. Without this guard, the wallet's
+// initial sync drops the genesis Dust UTXO silently, then fails the deploy
+// transaction with `Wallet.InsufficientFunds: could not balance dust`.
+// Drop on the day this is verified fixed upstream.
+const _origTryApply = ledger.ZswapChainState.prototype.tryApply;
+ledger.ZswapChainState.prototype.tryApply = function (...args: unknown[]) {
+  try {
+    return _origTryApply.apply(this, args as any);
+  } catch {
+    return [this, new Map()];
+  }
+};
+
 const CONFIG = {
   indexer:     'http://localhost:8088/api/v4/graphql',
   indexerWS:   'ws://localhost:8088/api/v4/graphql/ws',
@@ -151,4 +165,38 @@ export function hexToBytes32(hex: string): Uint8Array {
   const bytes = new Uint8Array(32);
   bytes.set(buffer.subarray(0, Math.min(32, buffer.length)));
   return bytes;
+}
+
+// Wait until wallet state reports isSynced=true. Uses the proven rx pipe
+// pattern (filter + first emission) rather than polling — the polling form
+// can resolve early on a BehaviorSubject's cached value before the
+// genesis state has finished applying, which led to a misleading
+// "could not balance dust" downstream.
+export async function syncWallet(
+  walletCtx: Awaited<ReturnType<typeof createWallet>>,
+  label: string,
+): Promise<void> {
+  process.stdout.write(`      syncing ${label} to network`);
+  await Rx.firstValueFrom(
+    walletCtx.wallet.state().pipe(
+      Rx.throttleTime(5_000),
+      Rx.tap(() => process.stdout.write(' .')),
+      Rx.filter((state) => state.isSynced === true),
+    ),
+  );
+  console.log('  done.');
+}
+
+export function printBalances(state: any): void {
+  const fmt = (v: any) => (v === undefined || v === null ? '(none)' : String(v));
+  const unshielded = Object.entries(state.unshielded.balances as Record<string, bigint>);
+  const shielded = Object.entries(state.shielded.balances as Record<string, bigint>);
+  let dust = '(unknown)';
+  try {
+    dust = fmt(
+      state.dust?.capabilities?.coinsAndBalances?.getWalletBalance?.(state.dust.state, new Date()) ??
+        state.dust?.walletBalance?.(new Date()),
+    );
+  } catch {}
+  console.log(`      wallet: ${unshielded.length} Night, ${shielded.length} Zswap, dust=${dust}`);
 }

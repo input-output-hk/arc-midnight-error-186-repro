@@ -21,6 +21,8 @@ import {
   zkConfigPath,
   PRIVATE_STATE_ID,
   hexToBytes32,
+  syncWallet,
+  printBalances,
 } from './utils.js';
 
 const SEED = process.env.WALLET_SEED;
@@ -46,10 +48,10 @@ const compiled = CompiledContract.make('holder', HolderContract.Contract).pipe(
 
 console.log('[1/5] Spinning up wallet, providers ...');
 const walletCtx = await createWallet(SEED);
-console.log('      waiting for wallet to sync ...');
-await waitSynced();
+await syncWallet(walletCtx, 'wallet');
+const initialState = await firstValueFrom(walletCtx.wallet.state());
+printBalances(initialState);
 const providers = await createProviders(walletCtx);
-console.log('      ✓ wallet synced.');
 console.log('');
 
 console.log('[2/5] Deploying SENDER contract ...');
@@ -131,18 +133,6 @@ try {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-
-async function waitSynced(): Promise<void> {
-  const { Subject } = await import('rxjs');
-  // Drain wallet state once it reports isSynced=true.
-  const _ = new Subject();
-  for (let i = 0; i < 60; i++) {
-    const s = await firstValueFrom(walletCtx.wallet.state());
-    if (s.isSynced) return;
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  throw new Error('Wallet did not sync within 60s — check that the local devnet is up.');
-}
 
 async function reportVersions(): Promise<void> {
   const pkgPath = new URL('../package.json', import.meta.url);
