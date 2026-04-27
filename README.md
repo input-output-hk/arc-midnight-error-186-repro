@@ -127,6 +127,29 @@ fixed: please open an issue on this repository (or the upstream
 Midnight tracker) with your version pins so we can update the README
 and close out the reproduction.
 
+## Related upstream issues
+
+This reproduction is consistent with several issues already filed
+upstream in the Midnight Network organisation. The canonical open
+issue for this exact scenario is `midnight-ledger#233`; the others are
+included for context.
+
+| Repo / Issue | State | Title | Notes |
+|--------------|-------|-------|-------|
+| [`midnight-ledger#233`](https://github.com/midnightntwrk/midnight-ledger/issues/233) | 🟢 open | Invalid Transaction: Custom error: 186 — `Malformed(MalformedError::EffectsCheckFailure)` | **Canonical issue.** Reporter's scenario matches this reproduction directly: `mintUnshieldedToken` / `sendUnshielded` to any recipient that is not the wallet executing the transaction is rejected by the node. |
+| [`midnight-node#1374`](https://github.com/midnightntwrk/midnight-node/issues/1374) | 🟢 open | `sendShielded` + `insertCoin`-on-change fails with `EffectsCheckFailure` (186) on contracts with 17 ledger fields | Different code path but same `Custom error: 186` / `EffectsCheckFailure`. Reporter posits a "fields + reads ≤ ~20" budget. |
+| [`midnight-js#720`](https://github.com/midnightntwrk/midnight-js/issues/720) | 🔴 closed | Circuit `sendUnshielded` fails for target user address different from wallet user | Closed, but contains the most precise diagnosis we've found: *"the related TX intents are incorrect. The circuit `sendUnshielded` to user `<X>`, but after `balanceUnboundTransaction`, the `fallible_unshielded_offer` incorrectly send to wallet address of `<wallet>`. … SO it is a bug of SDKs when building TX based on contract call effects."* This identifies the SDK-side recipient rewrite that the node then rejects. |
+| [`midnight-js#707`](https://github.com/midnightntwrk/midnight-js/issues/707) | 🔴 closed | `mintUnshieldedToken` circuit call fails with Custom error: 186 | Originally filed as `LFDT-Minokawa/compact#234`; closed there with the comment "does not look like a Compact bug at this time. Hypothesis is that it is probably midnight-js or the wallet." Effectively superseded by `midnight-ledger#233`. |
+| [`midnight-js#731`](https://github.com/midnightntwrk/midnight-js/issues/731) | 🟢 open | `mintShieldedToken` + `receiveUnshielded` combo fails when wallet has only unshielded NIGHT | Adjacent — same family of `balanceUnboundTransaction` issues. |
+| [`midnight-wallet#250`](https://github.com/midnightntwrk/midnight-wallet/issues/250) | 🟢 open | `balanceUnboundTransaction` fails when circuit combines `mintShieldedToken` + `receiveUnshielded` | Adjacent — same family. |
+
+The pattern: every reported instance of `Custom error: 186` /
+`MalformedError::EffectsCheckFailure` traces to the SDK constructing
+a transaction whose effects do not match what the contract circuit
+declared. The recipient-rewrite bug identified in `midnight-js#720`
+is the most likely root cause for the contract-to-contract scenario
+this repository demonstrates.
+
 ## What success looks like
 
 If the bug has been fixed in your build, the script will print:
