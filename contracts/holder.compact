@@ -1,0 +1,56 @@
+pragma language_version 0.22;
+
+import CompactStandardLibrary;
+
+// ---------------------------------------------------------------------------
+// Minimal Night-holding contract — just enough surface to demonstrate the
+// `sendUnshielded` contract-to-contract bug.
+//
+// Two circuits:
+//   - `deposit_unshielded` — anyone can fund the contract with Night.
+//   - `send_unshielded_to_contract` — the contract sends Night to another
+//     contract address. THIS IS THE CIRCUIT THAT FAILS.
+//
+// On Midnight node `0.22.5` with `@midnight-ntwrk/midnight-js-* 4.0.4` and
+// `@midnight-ntwrk/wallet-sdk-* (latest as of 2026/04/27)`, every call to
+// `send_unshielded_to_contract` is rejected by the node's transaction
+// validator with:
+//
+//   1010: Invalid Transaction: Custom error: 186
+//
+// The same circuit form works correctly when the recipient is a `UserAddress`
+// (`right<ContractAddress, UserAddress>(...)`); only the `ContractAddress`
+// branch hits 186.
+// ---------------------------------------------------------------------------
+
+export ledger tx_count: Uint<64>;
+
+constructor() {
+  tx_count = 0 as Uint<64>;
+}
+
+// Anyone can deposit Night into this contract. Used to seed the sender
+// contract before the contract-to-contract send is attempted.
+export circuit deposit_unshielded(color: Bytes<32>, amount: Uint<128>): [] {
+  receiveUnshielded(disclose(color), disclose(amount));
+  tx_count = disclose((tx_count + (1 as Uint<64>)) as Uint<64>);
+}
+
+// THE FAILING CIRCUIT.
+//
+// Sends `amount` of `color` Night from this contract to another contract
+// (`recipient`). The Compact circuit compiles cleanly and the proof
+// generates successfully; the resulting extrinsic is then rejected by
+// the node with `1010: Invalid Transaction: Custom error: 186`.
+export circuit send_unshielded_to_contract(
+  color:     Bytes<32>,
+  amount:    Uint<128>,
+  recipient: ContractAddress,
+): [] {
+  sendUnshielded(
+    disclose(color),
+    disclose(amount),
+    left<ContractAddress, UserAddress>(disclose(recipient)),
+  );
+  tx_count = disclose((tx_count + (1 as Uint<64>)) as Uint<64>);
+}
