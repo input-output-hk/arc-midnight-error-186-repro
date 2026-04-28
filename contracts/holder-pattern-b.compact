@@ -1,0 +1,83 @@
+pragma language_version 0.22;
+
+import CompactStandardLibrary;
+
+// ---------------------------------------------------------------------------
+// Pattern B holder — modelled on `micro-dao.compact`'s `pot` custody.
+//
+// This is the canonical shielded-coin custody pattern used by the
+// midnight-contracts DAO and the Coracle reference contracts. The contract
+// declares a `QualifiedCoinInfo` cell to hold a coin, plus a separate
+// boolean to track whether the cell is populated (the cell itself has to
+// exist as a default value when empty, so coin presence is tracked
+// alongside).
+//
+// Hypothesis under test (see PATTERN-B-RESULTS.md): a contract-to-contract
+// `send` against a coin custodied this way will land cleanly, in contrast
+// with the `sendUnshielded(color, amount, recipient)` path in the sibling
+// `holder.compact`, which is rejected by the node with `Custom error: 186`
+// when the recipient is a `ContractAddress`.
+//
+// References:
+//   ../arc-passport/.../midnight-contracts/packages/dao/contract/src/micro-dao.compact:32
+//     `pot: QualifiedCoinInfo` declaration
+//   ../arc-passport/.../micro-dao.compact:133-138
+//     first-deposit vs. merge writeCoin pattern
+//   ../arc-passport/.../micro-dao.compact:172-175
+//     `send(pot, recipient, amount)` invocation
+// ---------------------------------------------------------------------------
+
+// Compactc 0.30 / language 0.22 renames the shielded coin types and
+// primitives to be explicitly suffixed (sendShielded/receiveShielded/
+// QualifiedShieldedCoinInfo/...), mirroring the existing
+// sendUnshielded/receiveUnshielded family. The DAO at pragma 0.14 still
+// uses the un-suffixed names; we use the suffixed ones here.
+
+export ledger held: QualifiedShieldedCoinInfo;  // The coin we custody.
+export ledger held_has_coin: Boolean;           // The cell exists default-valued
+                                                // when empty, so we track
+                                                // presence separately
+                                                // (mirrors `pot_has_coin`).
+export ledger tx_count: Uint<64>;
+
+constructor() {
+  tx_count = 0 as Uint<64>;
+}
+
+// Anyone may deposit a coin of any color. First call writes the coin to
+// `held`; subsequent calls merge the new coin into `held`.
+// Mirrors `set_topic` / `buy_in` in micro-dao.compact:132-138 and 151-157.
+export circuit deposit(coin: ShieldedCoinInfo): [] {
+  receiveShielded(disclose(coin));
+  if (!held_has_coin) {
+    held.writeCoin(disclose(coin), right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+    held_has_coin = true;
+  } else {
+    held.writeCoin(mergeCoinImmediate(held, disclose(coin)), right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+  }
+  tx_count = disclose((tx_count + (1 as Uint<64>)) as Uint<64>);
+}
+
+// Send `amount` from `held` to a contract address. Mirrors `cash_out` in
+// micro-dao.compact:172-175, but to a `ContractAddress` recipient and
+// supporting partial sends (the change coin is written back to `held`).
+//
+// THIS IS THE CIRCUIT THE HYPOTHESIS HINGES ON. If Pattern B custody
+// resolves error 186, this transaction will be accepted by the node.
+export circuit send_to_contract(recipient: ContractAddress, amount: Uint<128>): [] {
+  assert(held_has_coin, "send_to_contract: contract holds no coin");
+  const result = sendShielded(
+    held,
+    right<ZswapCoinPublicKey, ContractAddress>(disclose(recipient)),
+    disclose(amount));
+  if (result.change.is_some) {
+    // Change goes back to self as a fresh coin output (the stdlib
+    // `sendShielded` already creates the zswap input/output for it; we
+    // just need to remember the new coin info in `held`).
+    held.writeCoin(result.change.value, right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+  } else {
+    held = default<QualifiedShieldedCoinInfo>;
+    held_has_coin = false;
+  }
+  tx_count = disclose((tx_count + (1 as Uint<64>)) as Uint<64>);
+}

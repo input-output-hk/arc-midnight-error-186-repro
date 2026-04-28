@@ -7,7 +7,9 @@
   "license": "Apache-2.0",
   "scripts": {
     "compile": "compact compile contracts/holder.compact contracts/managed/holder",
-    "repro": "tsx src/repro.ts"
+    "compile:pattern-b": "compact compile contracts/holder-pattern-b.compact contracts/managed/holder-pattern-b",
+    "repro": "tsx src/repro.ts",
+    "repro:pattern-b": "tsx src/repro-pattern-b.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
