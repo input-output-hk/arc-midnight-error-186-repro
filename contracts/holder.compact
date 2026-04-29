@@ -54,3 +54,10 @@ export circuit send_unshielded_to_contract(
   );
   tx_count = disclose((tx_count + (1 as Uint<64>)) as Uint<64>);
 }
+
+export circuit receive_unshielded_from_contract(
+  color:     Bytes<32>,
+  amount:    Uint<128>
+): [] {
+  receiveUnshielded(disclose(color), disclose(amount));
+}

@@ -1,13 +1,3 @@
-// Reproduction of the Midnight node `Custom error: 186` rejection.
-//
-// Procedure:
-//   1. Deploy two instances of the same contract (sender + recipient).
-//   2. User wallet deposits Night into the sender contract.
-//   3. The sender contract attempts to send Night to the recipient contract.
-//   4. The transaction is rejected by the node with:
-//        1010: Invalid Transaction: Custom error: 186
-//
-// Run with: npm run repro
 
 import * as fs from 'node:fs';
 import { firstValueFrom } from 'rxjs';
@@ -24,6 +14,8 @@ import {
   syncWallet,
   printBalances,
 } from './utils.js';
+import { withMultiContractScopedTransaction } from './multi-contract-tx.js';
+import { ContractAddress } from "@midnight-ntwrk/ledger-v8";
 
 const SEED = process.env.WALLET_SEED;
 if (!SEED) {
@@ -63,6 +55,7 @@ const sender = await deployContract(providers, {
 const senderAddress = sender.deployTxData.public.contractAddress;
 console.log(`      ✓ ${senderAddress}`);
 console.log('');
+await printBalance(providers, senderAddress, 'Sender');
 
 console.log('[3/5] Deploying RECIPIENT contract ...');
 const recipient = await deployContract(providers, {
@@ -73,6 +66,7 @@ const recipient = await deployContract(providers, {
 const recipientAddress = recipient.deployTxData.public.contractAddress;
 console.log(`      ✓ ${recipientAddress}`);
 console.log('');
+await printBalance(providers, recipientAddress, 'Recipient');
 
 // Genesis Night color on the dev chain.
 const NIGHT_COLOR = '0'.repeat(64);
@@ -81,27 +75,58 @@ const SEND_AMOUNT = 100n;
 
 console.log(`[4/5] Funding SENDER: depositing ${DEPOSIT_AMOUNT} Night from user wallet ...`);
 const depositResult = await sender.callTx.deposit_unshielded(hexToBytes32(NIGHT_COLOR), DEPOSIT_AMOUNT);
-const depositTx = depositResult?.public?.txId ?? depositResult?.public?.transactionHash;
+const depositTx = depositResult?.public?.txId ?? depositResult?.public?.txHash;
 console.log(`      ✓ deposit tx: ${depositTx}`);
 console.log('');
+await printBalance(providers, senderAddress, 'Sender');
+await printBalance(providers, recipientAddress, 'Recipient');
 
 console.log(`[5/5] SENDER → RECIPIENT: sendUnshielded(${SEND_AMOUNT} Night)`);
 console.log('      this is the call that triggers error 186.');
 console.log('');
 
+const t0 = Date.now();
+const mark = (label: string): void => {
+    const dt = ((Date.now() - t0) / 1000).toFixed(2);
+    console.log(`      [+${dt}s] ${label}`);
+};
+
 try {
-  const recipientArg = { bytes: hexToBytes32(recipientAddress.replace(/^0x/, '')) };
-  const sendResult = await sender.callTx.send_unshielded_to_contract(
-    hexToBytes32(NIGHT_COLOR),
-    SEND_AMOUNT,
-    recipientArg,
-  );
-  const sendTx = sendResult?.public?.txId ?? sendResult?.public?.transactionHash;
+    const recipientArg = { bytes: hexToBytes32(recipientAddress.replace(/^0x/, '')) };
+
+    mark('entering withMultiContractScopedTransaction');
+    const bundled = await withMultiContractScopedTransaction(
+        providers,
+        async (txCtx) => {
+            mark('before sender.send_unshielded_to_contract await');
+            await sender.callTx.send_unshielded_to_contract(
+                txCtx.for(sender),
+                hexToBytes32(NIGHT_COLOR),
+                SEND_AMOUNT,
+                recipientArg,
+            );
+            mark('after sender.send_unshielded_to_contract returned (CallResult queued)');
+            mark('before recipient.receive_unshielded_from_contract await');
+            await recipient.callTx.receive_unshielded_from_contract(
+                txCtx.for(recipient),
+                hexToBytes32(NIGHT_COLOR),
+                SEND_AMOUNT,
+            );
+            mark('after recipient.receive_unshielded_from_contract returned (CallResult queued)');
+            mark('exiting fn — ctx.submit() will run next (prove → balance → submit → watch)');
+        },
+        {scopeName: 'sender_send + recipient_receive (single intent)'},
+    );
+    mark('withMultiContractScopedTransaction resolved');
+
+    const sendTx = bundled.public.txId ?? bundled.public.txHash;
 
   console.log('═══════════════════════════════════════════════════════════════════');
   console.log(' UNEXPECTED: the contract→contract send SUCCEEDED.');
   console.log('═══════════════════════════════════════════════════════════════════');
   console.log(`tx hash: ${sendTx}`);
+  await printBalance(providers, senderAddress, 'Sender');
+  await printBalance(providers, recipientAddress, 'Recipient');
   console.log('');
   console.log('If you are seeing this, error 186 may be FIXED on your build.');
   console.log('Please report your software versions:');
@@ -141,4 +166,9 @@ async function reportVersions(): Promise<void> {
     if (name.startsWith('@midnight-ntwrk/')) console.log(`  ${name}: ${version}`);
   }
   console.log('  node image: see infra/docker-compose.yml (default: midnightntwrk/midnight-node:0.22.5)');
+}
+
+async function printBalance(providers: Awaited<ReturnType<typeof createProviders>>, address: ContractAddress, label: string): Promise<void> {
+    const state = await providers.publicDataProvider.queryContractState(address);
+    console.log(`  ${label} contract.balance:`, state?.balance);
 }

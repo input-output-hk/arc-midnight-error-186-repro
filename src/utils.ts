@@ -14,7 +14,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
+import { FacadeState, WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
@@ -93,6 +93,8 @@ export async function createWallet(seed: string) {
   // MalformedError::BalanceCheckOverspend at deploy time.
   const feeBlocksMargin = Number(process.env.FEE_BLOCKS_MARGIN ?? '100');
 
+  const additionalFeeOverhead = 1n;
+
   const configuration = {
     networkId,
     indexerClientConnection: {
@@ -101,7 +103,7 @@ export async function createWallet(seed: string) {
     },
     provingServerUrl: new URL(CONFIG.proofServer),
     relayURL: new URL(CONFIG.node.replace(/^http/, 'ws')),
-    costParameters: { feeBlocksMargin },
+    costParameters: { feeBlocksMargin, additionalFeeOverhead },
     txHistoryStorage: NoopTxHistoryStorage,
   };
 
@@ -127,6 +129,12 @@ export async function createProviders(walletCtx: Awaited<ReturnType<typeof creat
     getCoinPublicKey: () => state.shielded.coinPublicKey.toHexString(),
     getEncryptionPublicKey: () => state.shielded.encryptionPublicKey.toHexString(),
     async balanceTx(tx: any, ttl?: Date) {
+      const t0 = Date.now();
+      const mark = (label: string): void => {
+        const dt = ((Date.now() - t0) / 1000).toFixed(2);
+        console.log(`      [balanceTx +${dt}s] ${label}`);
+      };
+      mark('balanceUnboundTransaction start');
       const recipe = await walletCtx.wallet.balanceUnboundTransaction(
         tx,
         {
@@ -135,8 +143,14 @@ export async function createProviders(walletCtx: Awaited<ReturnType<typeof creat
         },
         { ttl: ttl ?? new Date(Date.now() + 30 * 60 * 1000) },
       );
+      mark('balanceUnboundTransaction done');
+      mark('signRecipe start');
       const signed = await walletCtx.wallet.signRecipe(recipe, signFn);
-      return walletCtx.wallet.finalizeRecipe(signed);
+      mark('signRecipe done');
+      mark('finalizeRecipe start');
+      const finalized = await walletCtx.wallet.finalizeRecipe(signed);
+      mark('finalizeRecipe done');
+      return finalized;
     },
     submitTx: (tx: any) => walletCtx.wallet.submitTransaction(tx) as any,
   };
@@ -188,7 +202,7 @@ export async function syncWallet(
   console.log('  done.');
 }
 
-export function printBalances(state: any): void {
+export function printBalances(state: FacadeState): void {
   const fmt = (v: any) => (v === undefined || v === null ? '(none)' : String(v));
   const unshielded = Object.entries(state.unshielded.balances as Record<string, bigint>);
   const shielded = Object.entries(state.shielded.balances as Record<string, bigint>);
@@ -199,5 +213,5 @@ export function printBalances(state: any): void {
         state.dust?.walletBalance?.(new Date()),
     );
   } catch {}
-  console.log(`      wallet: ${unshielded.length} Night, ${shielded.length} Zswap, dust=${dust}`);
+  console.log(`      wallet: ${unshielded[0][1]} Night, ${shielded.length} Zswap, dust=${dust}`);
 }
