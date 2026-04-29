@@ -103,7 +103,7 @@ export async function createWallet(seed: string) {
     },
     provingServerUrl: new URL(CONFIG.proofServer),
     relayURL: new URL(CONFIG.node.replace(/^http/, 'ws')),
-    costParameters: { feeBlocksMargin, additionalFeeOverhead },
+    costParameters: { feeBlocksMargin },
     txHistoryStorage: NoopTxHistoryStorage,
   };
 
